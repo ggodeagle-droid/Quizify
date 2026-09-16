@@ -1,4 +1,5 @@
 import { QuizAttempt, StudyBuddyAdvice, StudyBuddyMessage } from "../types";
+import { checkIsAnswerCorrect } from "./answerUtils";
 
 // Subject-specific common subtopics dictionary for intelligent enrichment
 const TOPIC_SUBTOPIC_MAP: Record<string, string[]> = {
@@ -84,11 +85,8 @@ export function generateHeuristicAdvice(attempt: QuizAttempt): StudyBuddyAdvice 
   // Identify missed questions
   const missedQuestions = questions.filter((q) => {
     const u = userAnswers[q.id];
-    if (!u || u.trim() === "") return true;
-    return (
-      u.trim().toLowerCase() !== q.correctAnswer.trim().toLowerCase() &&
-      !u.trim().toLowerCase().includes(q.correctAnswer.trim().toLowerCase())
-    );
+    if (!u || String(u).trim() === "") return true;
+    return !checkIsAnswerCorrect(u, q.correctAnswer);
   });
 
   // Classify topics by accuracy

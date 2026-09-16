@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import { QuizAttempt } from "../types";
+import { checkIsAnswerCorrect } from "./answerUtils";
 
 export function generateQuizResultPdf(attempt: QuizAttempt): void {
   const doc = new jsPDF({
@@ -177,11 +178,8 @@ export function generateQuizResultPdf(attempt: QuizAttempt): void {
   // 6. Iterate through each question
   attempt.questions.forEach((q, index) => {
     const userAns = attempt.userAnswers[q.id];
-    const isSkipped = !userAns || userAns.trim() === "";
-    const isCorrect =
-      !isSkipped &&
-      (userAns.trim().toLowerCase() === q.correctAnswer.trim().toLowerCase() ||
-        userAns.trim().toLowerCase().includes(q.correctAnswer.trim().toLowerCase()));
+    const isSkipped = !userAns || String(userAns).trim() === "";
+    const isCorrect = !isSkipped && checkIsAnswerCorrect(userAns, q.correctAnswer);
 
     // Prepare text lines to measure required height
     doc.setFont("helvetica", "bold");

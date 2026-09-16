@@ -28,6 +28,8 @@ import { QuizAttempt, Question } from "../types";
 import { playCompleteSound } from "../utils/audio";
 import { generateQuizResultPdf } from "../utils/pdfExport";
 import { StudyBuddySidebar } from "./StudyBuddySidebar";
+import { checkIsAnswerCorrect } from "../utils/answerUtils";
+import { DistractorExplanationView } from "./DistractorExplanationView";
 
 interface ResultsViewProps {
   attempt: QuizAttempt;
@@ -110,11 +112,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
     }
 
     const userAns = attempt.userAnswers[q.id];
-    const isSkipped = !userAns || userAns.trim() === "";
-    const isCorrect =
-      !isSkipped &&
-      (userAns.trim().toLowerCase() === q.correctAnswer.trim().toLowerCase() ||
-        userAns.trim().toLowerCase().includes(q.correctAnswer.trim().toLowerCase()));
+    const isSkipped = !userAns || String(userAns).trim() === "";
+    const isCorrect = !isSkipped && checkIsAnswerCorrect(userAns, q.correctAnswer);
 
     if (reviewStatusFilter === "correct") return isCorrect;
     if (reviewStatusFilter === "missed") return !isCorrect;
@@ -123,11 +122,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
   const missedQuestionsList = attempt.questions.filter((q) => {
     const userAns = attempt.userAnswers[q.id];
-    if (!userAns || userAns.trim() === "") return true;
-    return (
-      userAns.trim().toLowerCase() !== q.correctAnswer.trim().toLowerCase() &&
-      !userAns.trim().toLowerCase().includes(q.correctAnswer.trim().toLowerCase())
-    );
+    if (!userAns || String(userAns).trim() === "") return true;
+    return !checkIsAnswerCorrect(userAns, q.correctAnswer);
   });
 
   const handleCreateMissedCards = () => {
@@ -450,11 +446,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                 ) : (
                   filteredQuestions.map((q, idx) => {
                     const userAns = attempt.userAnswers[q.id];
-                    const isSkipped = !userAns || userAns.trim() === "";
-                    const isCorrect =
-                      !isSkipped &&
-                      (userAns.trim().toLowerCase() === q.correctAnswer.trim().toLowerCase() ||
-                        userAns.trim().toLowerCase().includes(q.correctAnswer.trim().toLowerCase()));
+                    const isSkipped = !userAns || String(userAns).trim() === "";
+                    const isCorrect = !isSkipped && checkIsAnswerCorrect(userAns, q.correctAnswer);
 
                     return (
                       <div
@@ -542,19 +535,14 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
                           <div className="rounded-lg bg-white/80 p-2.5 border border-slate-200/60">
                             <span className="font-semibold text-slate-500 block text-[11px]">Correct Answer:</span>
-                            <span className="font-bold text-emerald-800">{q.correctAnswer}</span>
+                            <span className="font-bold text-emerald-800">{String(q.correctAnswer)}</span>
                           </div>
                         </div>
 
                         <div className="rounded-lg bg-white p-3 border border-slate-200/80 text-xs text-slate-700 space-y-1.5 shadow-2xs">
                           <p className="font-bold text-indigo-700">Explanation from Notes:</p>
                           <p className="leading-relaxed whitespace-pre-line">{q.explanation}</p>
-                          {q.distractorExplanations && (
-                            <div className="mt-2 pt-2 border-t border-slate-100 text-slate-600">
-                              <span className="font-bold text-rose-700 block mb-0.5">⚠️ Common Misconception / Distractor Trap:</span>
-                              <p className="leading-relaxed">{q.distractorExplanations}</p>
-                            </div>
-                          )}
+                          <DistractorExplanationView distractorExplanations={q.distractorExplanations} />
                         </div>
                       </div>
                     );

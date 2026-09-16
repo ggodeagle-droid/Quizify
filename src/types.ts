@@ -10,7 +10,7 @@ export interface Question {
   options?: string[]; // 4 options for MCQ, or ['True', 'False'] for true_false
   correctAnswer: string;
   explanation: string;
-  distractorExplanations?: Record<string, string>; // Explains why wrong options are incorrect
+  distractorExplanations?: Record<string, string> | string; // Explains why wrong options are incorrect
   topic?: string;
   hint?: string;
   cognitiveLevel?: CognitiveLevel;

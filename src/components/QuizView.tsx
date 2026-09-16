@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { Question, QuizConfig } from "../types";
 import { playSuccessSound, playIncorrectSound } from "../utils/audio";
+import { checkIsAnswerCorrect, getSafeNormalizedString } from "../utils/answerUtils";
+import { DistractorExplanationView } from "./DistractorExplanationView";
 
 interface QuizViewProps {
   quizTitle: string;
@@ -103,7 +105,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
       return;
     }
 
-    const isCorrect = option.trim().toLowerCase() === currentQ.correctAnswer.trim().toLowerCase();
+    const isCorrect = checkIsAnswerCorrect(option, currentQ.correctAnswer);
     if (soundEffects) {
       if (isCorrect) playSuccessSound();
       else playIncorrectSound();
@@ -120,9 +122,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
     if (!shortAnswerInput.trim()) return;
 
     const trimmed = shortAnswerInput.trim();
-    const isCorrect =
-      trimmed.toLowerCase() === currentQ.correctAnswer.toLowerCase() ||
-      trimmed.toLowerCase().includes(currentQ.correctAnswer.toLowerCase());
+    const isCorrect = checkIsAnswerCorrect(trimmed, currentQ.correctAnswer);
 
     if (soundEffects) {
       if (isCorrect) playSuccessSound();
@@ -143,12 +143,10 @@ export const QuizView: React.FC<QuizViewProps> = ({
   };
 
   const answeredCount = Object.keys(userAnswers).length;
-  const progressPercent = ((currentIndex + 1) / totalQuestions) * 100;
+  const progressPercent = totalQuestions > 0 ? ((currentIndex + 1) / totalQuestions) * 100 : 0;
   const isAnswered = !!currentAnswer;
-  const isCorrect =
-    isAnswered &&
-    (currentAnswer.trim().toLowerCase() === currentQ.correctAnswer.trim().toLowerCase() ||
-      currentAnswer.trim().toLowerCase().includes(currentQ.correctAnswer.trim().toLowerCase()));
+  const isCorrect = isAnswered && checkIsAnswerCorrect(currentAnswer, currentQ.correctAnswer);
+  const normalizedCorrect = getSafeNormalizedString(currentQ.correctAnswer);
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 lg:px-8 space-y-6">
@@ -302,7 +300,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
             {currentQ.options?.map((option, idx) => {
               const letter = String.fromCharCode(65 + idx); // A, B, C, D
               const isSelected = currentAnswer === option;
-              const isOptionCorrect = option.trim().toLowerCase() === currentQ.correctAnswer.trim().toLowerCase();
+              const isOptionCorrect = checkIsAnswerCorrect(option, currentQ.correctAnswer);
 
               // If instant feedback is active and user answered
               let optionStyle = "border-slate-200 bg-slate-50/60 hover:bg-slate-100 hover:border-slate-300 text-slate-800";
@@ -355,8 +353,8 @@ export const QuizView: React.FC<QuizViewProps> = ({
         {currentQ.type === "true_false" && (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" id="tf-options-container">
             {["True", "False"].map((choice) => {
-              const isSelected = currentAnswer === choice;
-              const isChoiceCorrect = choice.toLowerCase() === currentQ.correctAnswer.toLowerCase();
+              const isSelected = String(currentAnswer).toLowerCase() === choice.toLowerCase();
+              const isChoiceCorrect = choice.toLowerCase() === normalizedCorrect;
 
               let choiceStyle = "border-slate-200 bg-slate-50/60 hover:bg-slate-100 text-slate-800";
 
@@ -448,7 +446,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
               )}
               <div className="space-y-2 text-xs sm:text-sm flex-1">
                 <p className="font-extrabold text-sm sm:text-base">
-                  {isCorrect ? "Correct! Well done." : `Not quite. Correct answer: "${currentQ.correctAnswer}"`}
+                  {isCorrect ? "Correct! Well done." : `Not quite. Correct answer: "${String(currentQ.correctAnswer)}"`}
                 </p>
                 <div className="rounded-lg bg-white/90 p-3 border border-slate-200/80 text-slate-800 space-y-1.5 shadow-2xs">
                   <p className="font-bold text-indigo-700 flex items-center gap-1.5">
@@ -457,12 +455,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
                   <p className="whitespace-pre-line leading-relaxed text-xs sm:text-sm">
                     {currentQ.explanation}
                   </p>
-                  {currentQ.distractorExplanations && (
-                    <div className="mt-2 pt-2 border-t border-slate-100 text-slate-600 text-xs">
-                      <span className="font-bold text-rose-700 block mb-0.5">⚠️ Common Misconception / Distractor Trap:</span>
-                      <p className="leading-relaxed">{currentQ.distractorExplanations}</p>
-                    </div>
-                  )}
+                  <DistractorExplanationView distractorExplanations={currentQ.distractorExplanations} />
                 </div>
               </div>
             </div>

@@ -30,6 +30,8 @@ import {
   DEFAULT_SETTINGS,
 } from "./utils/storage";
 import { createInstantQuizFromNotes } from "./utils/localQuizGenerator";
+import { checkIsAnswerCorrect } from "./utils/answerUtils";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AlertCircle, X } from "lucide-react";
 
 export default function App() {
@@ -302,12 +304,10 @@ export default function App() {
       topicPerformance[topic].total += 1;
 
       const userAns = userAnswers[q.id];
-      if (!userAns) {
+      if (!userAns || String(userAns).trim() === "") {
         skippedCount += 1;
       } else {
-        const isCorrect =
-          userAns.trim().toLowerCase() === q.correctAnswer.trim().toLowerCase() ||
-          userAns.trim().toLowerCase().includes(q.correctAnswer.trim().toLowerCase());
+        const isCorrect = checkIsAnswerCorrect(userAns, q.correctAnswer);
 
         if (isCorrect) {
           correctCount += 1;
@@ -493,92 +493,94 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1">
-        {activeTab === "home" && (
-          <HomeView
-            notesText={notesText}
-            setNotesText={setNotesText}
-            uploadedFile={uploadedFile}
-            setUploadedFile={setUploadedFile}
-            onProceedToSetup={() => setActiveTab("setup")}
-            onQuickQuiz={handleQuickQuiz}
-            onDirectFlashcards={handleGenerateFlashcards}
-            isProcessing={isProcessing}
-          />
-        )}
+        <ErrorBoundary onReset={() => setActiveTab("home")}>
+          {activeTab === "home" && (
+            <HomeView
+              notesText={notesText}
+              setNotesText={setNotesText}
+              uploadedFile={uploadedFile}
+              setUploadedFile={setUploadedFile}
+              onProceedToSetup={() => setActiveTab("setup")}
+              onQuickQuiz={handleQuickQuiz}
+              onDirectFlashcards={handleGenerateFlashcards}
+              isProcessing={isProcessing}
+            />
+          )}
 
-        {activeTab === "setup" && (
-          <QuizSetupView
-            notesText={notesText}
-            uploadedFileName={uploadedFile?.name}
-            initialConfig={quizConfig}
-            onGenerateQuiz={handleGenerateQuiz}
-            onBack={() => setActiveTab("home")}
-            isProcessing={isProcessing}
-            processingStep={processingStep}
-          />
-        )}
+          {activeTab === "setup" && (
+            <QuizSetupView
+              notesText={notesText}
+              uploadedFileName={uploadedFile?.name}
+              initialConfig={quizConfig}
+              onGenerateQuiz={handleGenerateQuiz}
+              onBack={() => setActiveTab("home")}
+              isProcessing={isProcessing}
+              processingStep={processingStep}
+            />
+          )}
 
-        {activeTab === "quiz" && activeQuiz && (
-          <QuizView
-            quizTitle={activeQuiz.title}
-            subject={activeQuiz.subject}
-            questions={activeQuiz.questions}
-            config={quizConfig}
-            userAnswers={userAnswers}
-            setUserAnswers={setUserAnswers}
-            onSubmitQuiz={handleSubmitQuiz}
-            onExitQuiz={() => setActiveTab("home")}
-            soundEffects={settings.soundEffects}
-          />
-        )}
+          {activeTab === "quiz" && activeQuiz && (
+            <QuizView
+              quizTitle={activeQuiz.title}
+              subject={activeQuiz.subject}
+              questions={activeQuiz.questions}
+              config={quizConfig}
+              userAnswers={userAnswers}
+              setUserAnswers={setUserAnswers}
+              onSubmitQuiz={handleSubmitQuiz}
+              onExitQuiz={() => setActiveTab("home")}
+              soundEffects={settings.soundEffects}
+            />
+          )}
 
-        {activeTab === "results" && latestAttempt && (
-          <ResultsView
-            attempt={latestAttempt}
-            onRetryQuiz={handleRetryQuiz}
-            onNewQuiz={() => {
-              setActiveQuiz(null);
-              setUserAnswers({});
-              setActiveTab("home");
-            }}
-            onConvertToFlashcards={handleConvertQuizToFlashcards}
-            onLaunchAdaptiveQuiz={handleLaunchAdaptiveQuiz}
-            soundEffects={settings.soundEffects}
-          />
-        )}
+          {activeTab === "results" && latestAttempt && (
+            <ResultsView
+              attempt={latestAttempt}
+              onRetryQuiz={handleRetryQuiz}
+              onNewQuiz={() => {
+                setActiveQuiz(null);
+                setUserAnswers({});
+                setActiveTab("home");
+              }}
+              onConvertToFlashcards={handleConvertQuizToFlashcards}
+              onLaunchAdaptiveQuiz={handleLaunchAdaptiveQuiz}
+              soundEffects={settings.soundEffects}
+            />
+          )}
 
-        {activeTab === "flashcards" && (
-          <FlashcardsView
-            deck={activeDeck}
-            onGenerateFlashcards={handleGenerateFlashcards}
-            isProcessing={isProcessing}
-            soundEffects={settings.soundEffects}
-            hasNotes={notesText.trim().length > 20 || !!uploadedFile}
-          />
-        )}
+          {activeTab === "flashcards" && (
+            <FlashcardsView
+              deck={activeDeck}
+              onGenerateFlashcards={handleGenerateFlashcards}
+              isProcessing={isProcessing}
+              soundEffects={settings.soundEffects}
+              hasNotes={notesText.trim().length > 20 || !!uploadedFile}
+            />
+          )}
 
-        {activeTab === "history" && (
-          <HistoryView
-            history={history}
-            onOpenAttempt={(attempt) => {
-              setLatestAttempt(attempt);
-              setActiveTab("results");
-            }}
-            onRetakeAttempt={handleRetakeFromHistory}
-            onDeleteAttempt={handleDeleteAttempt}
-            onClearAll={handleClearHistory}
-            onGoToHome={() => setActiveTab("home")}
-            onSeedSampleHistory={handleSeedSampleHistory}
-          />
-        )}
+          {activeTab === "history" && (
+            <HistoryView
+              history={history}
+              onOpenAttempt={(attempt) => {
+                setLatestAttempt(attempt);
+                setActiveTab("results");
+              }}
+              onRetakeAttempt={handleRetakeFromHistory}
+              onDeleteAttempt={handleDeleteAttempt}
+              onClearAll={handleClearHistory}
+              onGoToHome={() => setActiveTab("home")}
+              onSeedSampleHistory={handleSeedSampleHistory}
+            />
+          )}
 
-        {activeTab === "settings" && (
-          <SettingsView
-            settings={settings}
-            onSaveSettings={handleSaveSettings}
-            onClearAllData={handleClearAllData}
-          />
-        )}
+          {activeTab === "settings" && (
+            <SettingsView
+              settings={settings}
+              onSaveSettings={handleSaveSettings}
+              onClearAllData={handleClearAllData}
+            />
+          )}
+        </ErrorBoundary>
       </main>
 
       {/* Footer */}

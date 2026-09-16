@@ -1,0 +1,6 @@
+{
+  "name": "Quizify AI",
+  "description": "Smart AI-powered quiz and flashcard generator that turns notes, study guides, documents, and handwritten images into interactive revision material.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

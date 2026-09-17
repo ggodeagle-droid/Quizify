@@ -322,7 +322,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         <div className="mt-6 pt-5 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0" />
-            <span>Questions generated strictly from your notes. No unrelated hallucinations.</span>
+            <span>Clear, simple questions for Class 10–12. Strictly relevant to your notes.</span>
           </div>
 
           <div className="flex w-full sm:w-auto items-center flex-wrap sm:flex-nowrap gap-2.5">

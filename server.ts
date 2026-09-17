@@ -1,9 +1,9 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
-import { GoogleGenAI, Type } from "@google/genai";
-import { createServer as createViteServer } from "vite";
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 
 dotenv.config();
 
@@ -91,10 +91,22 @@ function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMsg: string): Pr
   ]);
 }
 
+// Dynamic model health tracker to route around temporary 503/load spikes
+const modelCooldownUntil: Record<string, number> = {};
+
+function isModelInCooldown(model: string): boolean {
+  const until = modelCooldownUntil[model];
+  return typeof until === "number" && Date.now() < until;
+}
+
+function markModelCooldown(model: string, durationMs = 60000) {
+  modelCooldownUntil[model] = Date.now() + durationMs;
+}
+
 /**
- * Safely invokes Gemini generateContent with low-latency priority and automatic model fallback.
- * Prioritizes gemini-3.1-flash-lite for ultra-fast (2-4s) structured generation,
- * followed seamlessly by gemini-flash-latest and gemini-3.8-flash.
+ * Safely invokes Gemini generateContent with dynamic model health routing,
+ * automatic thinkingConfig adaptation, and seamless error recovery.
+ * Supported non-paid models: gemini-3.1-flash-lite, gemini-3.8-flash, gemini-flash-latest.
  */
 async function callGeminiWithModelFallback(
   ai: GoogleGenAI,
@@ -105,37 +117,68 @@ async function callGeminiWithModelFallback(
     timeoutPerAttemptMs?: number;
   }
 ) {
-  // Ultra-fast model priority: gemini-3.1-flash-lite -> gemini-flash-latest -> gemini-3.8-flash
-  const defaultFastModels = [
+  // Balanced candidate models (valid in @google/genai SDK without requiring paid keys)
+  const candidateModels = [
     "gemini-3.1-flash-lite",
-    "gemini-flash-latest",
     "gemini-3.8-flash",
+    "gemini-flash-latest",
   ];
 
-  const modelsToTry = params.preferredModel
-    ? [params.preferredModel, ...defaultFastModels.filter((m) => m !== params.preferredModel)]
-    : defaultFastModels;
+  // Prioritize preferred model if specified, but if it is in cooldown, place it after healthy models
+  let orderedModels: string[];
+  if (params.preferredModel) {
+    const others = candidateModels.filter((m) => m !== params.preferredModel);
+    if (isModelInCooldown(params.preferredModel)) {
+      orderedModels = [...others, params.preferredModel];
+    } else {
+      orderedModels = [params.preferredModel, ...others];
+    }
+  } else {
+    orderedModels = [...candidateModels];
+  }
 
-  const perAttemptTimeout = params.timeoutPerAttemptMs || 9500; // 9.5s max per attempt
+  // Sort so that healthy models come before any model currently in cooldown
+  orderedModels.sort((a, b) => {
+    const aCool = isModelInCooldown(a) ? 1 : 0;
+    const bCool = isModelInCooldown(b) ? 1 : 0;
+    return aCool - bCool;
+  });
+
+  const perAttemptTimeout = params.timeoutPerAttemptMs || 25000;
   let lastError: any = null;
 
-  for (let i = 0; i < modelsToTry.length; i++) {
-    const model = modelsToTry[i];
+  for (let i = 0; i < orderedModels.length; i++) {
+    const model = orderedModels[i];
     try {
+      // Create clean config adapted to the specific model
+      const modelConfig = { ...params.config };
+      if (model.includes("flash-lite")) {
+        // gemini-3.1-flash-lite defaults to MINIMAL thinking for fast, low-latency generation
+        if (modelConfig.thinkingConfig) {
+          modelConfig.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
+        }
+      } else if (!model.startsWith("gemini-3")) {
+        // Non-Gemini 3 models (e.g. gemini-flash-latest) do not support thinkingConfig
+        delete modelConfig.thinkingConfig;
+      }
+
       const response = await withTimeout(
         ai.models.generateContent({
           model,
           contents: params.contents,
-          config: params.config,
+          config: modelConfig,
         }),
         perAttemptTimeout,
         `Model ${model} timed out after ${perAttemptTimeout}ms`
       );
+
+      // Successfully returned response: clear any previous cooldown for this model
+      delete modelCooldownUntil[model];
       return response;
     } catch (err: any) {
       lastError = err;
       const status = err?.status || err?.code || (err?.error && err?.error?.code);
-      const msg = err?.message || (typeof err === "string" ? err : JSON.stringify(err));
+      const msg = String(err?.message || err || "");
 
       const isTransient =
         status === 503 ||
@@ -149,14 +192,16 @@ async function callGeminiWithModelFallback(
         msg.includes("UNAVAILABLE") ||
         msg.includes("overloaded");
 
-      console.warn(
-        `Gemini attempt with model "${model}" failed/timed out (transient: ${isTransient}). Trying next model...`,
-        msg.slice(0, 140)
-      );
+      if (isTransient) {
+        // Mark this model in cooldown for 60 seconds so subsequent requests don't stall on it
+        markModelCooldown(model, 60000);
+        console.log(`[AI Routing] Model ${model} is experiencing high demand (503/UNAVAILABLE). Routing to next candidate...`);
+      } else {
+        console.log(`[AI Routing] Model ${model} returned non-transient status. Routing to next candidate...`);
+      }
 
-      // Brief pause before trying next model
-      if (i < modelsToTry.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
+      if (i < orderedModels.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, isTransient ? 300 : 150));
         continue;
       }
     }
@@ -226,10 +271,13 @@ function generateFallbackQuiz(notesText: string, config: any) {
       : "short_answer";
 
     if (qType === "mcq") {
-      const correct = `The system maintains directional progression governed by the specific relationship: "${line.substring(0, 55)}"`;
-      const d1 = `The process operates independently of boundary conditions without regard to "${line.substring(0, 45)}"`;
-      const d2 = `The rate accelerates indefinitely because inverse proportionality cancels all limiting parameters`;
-      const d3 = `The mechanism reverses its outcome because internal parameters substitute for external constraints`;
+      // Natural, direct school-exam style MCQ
+      const cleanSnippet = line.replace(/^[0-9.\-\s]+/, "").trim();
+      const questionPrompt = `Based on the notes, which of the following statements is TRUE regarding this concept?\n"${cleanSnippet.substring(0, 95)}..."`;
+      const correct = `It accurately follows the rule: "${cleanSnippet.substring(0, 50)}..."`;
+      const d1 = `It happens independently without needing any prerequisite conditions or energy`;
+      const d2 = `The rate drops to zero because external factors immediately stop the process`;
+      const d3 = `The process works in the exact opposite direction without any outside force`;
 
       const options = shuffleArray([correct, d1, d2, d3]);
 
@@ -237,57 +285,60 @@ function generateFallbackQuiz(notesText: string, config: any) {
         id: `q-${i + 1}`,
         type: "mcq",
         cognitiveLevel,
-        qualityScore: 9,
-        question: `Consider an experimental scenario testing the behavior described in your notes: "${line.substring(0, 80)}...". If external conditions are adjusted while standard operational limits are maintained, which outcome best represents the correct scientific behavior, and why?`,
+        qualityScore: 8,
+        question: questionPrompt,
         options,
         correctAnswer: correct,
-        explanation: `Why Correct: According to the principles in your notes, "${line}", this behavior directly preserves the established mechanism under controlled conditions.\nWhy Distractors Are Wrong:\n• Option with independent boundary conditions ignores the necessary constraints described in the notes.\n• Inverse proportionality does not eliminate physical limiting factors.\n• Mechanisms cannot invert established directionality without counter-acting energy inputs.`,
-        distractorExplanations: "Distractors test common student misconceptions regarding boundary constraints, rate limits, and mechanism directionality.",
+        explanation: `According to your notes: "${cleanSnippet}". This directly explains why this statement is correct.\n\nCommon Pitfall: Students often assume processes can happen without prerequisite conditions or spontaneously reverse without energy, which is not true here.`,
+        distractorExplanations: "Distractors test common student confusions about conditions and direction of the process.",
         topic,
-        hint: "Consider how boundary conditions and governing principles restrict possible outcomes.",
+        hint: "Look for the option that directly agrees with the statement in your notes.",
       });
     } else if (qType === "true_false") {
+      const cleanSnippet = line.replace(/^[0-9.\-\s]+/, "").trim();
       fallbackQuestions.push({
         id: `q-${i + 1}`,
         type: "true_false",
         cognitiveLevel: "understanding",
         qualityScore: 8,
-        question: `A student asserts: "In the context of ${topic.toLowerCase()}, the condition '${line.substring(0, 65)}' can occur without satisfying any prerequisite threshold." Does this assertion accurately reflect the principles in your notes?`,
+        question: `According to your notes, is the following statement TRUE or FALSE?\n"${cleanSnippet.substring(0, 90)}..."`,
         options: ["True", "False"],
-        correctAnswer: "False",
-        explanation: `Why Correct: False. The assertion is incorrect because your study notes outline specific mechanisms and dependent relationships for "${line.substring(0, 80)}", which require prerequisite threshold conditions to be met.`,
+        correctAnswer: "True",
+        explanation: `True. This is stated directly in your chapter notes: "${cleanSnippet}".`,
         topic,
-        hint: "Evaluate whether the process can function without standard dependency conditions.",
+        hint: "Check whether this statement matches the key point in your notes.",
       });
     } else if (qType === "fill_blank") {
-      const words = line.split(" ").filter((w) => w.length > 4);
+      const cleanSnippet = line.replace(/^[0-9.\-\s]+/, "").trim();
+      const words = cleanSnippet.split(" ").filter((w) => w.length > 4 && !/[,.;:()]/g.test(w));
       const targetWord = words[Math.min(1, words.length - 1)] || "equilibrium";
-      const masked = line.replace(new RegExp(targetWord, "i"), "_______");
+      const masked = cleanSnippet.replace(new RegExp(targetWord, "i"), "_______");
 
       fallbackQuestions.push({
         id: `q-${i + 1}`,
         type: "fill_blank",
         cognitiveLevel: "understanding",
         qualityScore: 8,
-        question: `Complete the conceptual statement regarding governing principles: "${masked}"`,
+        question: `Fill in the blank with the correct term from your notes:\n"${masked}"`,
         options: [],
         correctAnswer: targetWord,
-        explanation: `Why Correct: "${targetWord}" is the precise term fulfilling the operational relationship described in: "${line}".`,
+        explanation: `"${targetWord}" is the correct word from your notes: "${cleanSnippet}".`,
         topic,
-        hint: `The missing term starts with '${targetWord[0]}'.`,
+        hint: `The missing word begins with the letter '${targetWord[0]}'.`,
       });
     } else {
+      const cleanSnippet = line.replace(/^[0-9.\-\s]+/, "").trim();
       fallbackQuestions.push({
         id: `q-${i + 1}`,
         type: "short_answer",
-        cognitiveLevel: "reasoning",
-        qualityScore: 9,
-        question: `Analyze the following scenario: A system is configured according to "${line.substring(0, 85)}...". Explain the primary constraint that prevents spontaneous reversal of this process.`,
+        cognitiveLevel: "understanding",
+        qualityScore: 8,
+        question: `In 1–2 simple sentences, summarize the main point of this concept from your notes: "${cleanSnippet.substring(0, 80)}..."`,
         options: [],
-        correctAnswer: `The governing relationship stated in your notes (${line.substring(0, 60)}) establishes directional dependency.`,
-        explanation: `Why Correct: As highlighted in your notes, "${line}", the mechanism operates under thermodynamic and directional dependencies that prevent arbitrary reversal.`,
+        correctAnswer: cleanSnippet.substring(0, 75),
+        explanation: `Key point from your notes: "${cleanSnippet}".`,
         topic,
-        hint: "Focus on the directional relationship and governing parameters outlined in the notes.",
+        hint: "State the core fact or formula given in the notes.",
       });
     }
   }
@@ -339,8 +390,53 @@ function generateFallbackFlashcards(notesText: string, count: number = 10) {
   };
 }
 
-// 1. Health check endpoint
-app.get("/api/health", (_req, res) => {
+// Fallback feedback generator when AI services are temporarily unavailable or rate-limited
+function generateFallbackFeedback(attempt: any) {
+  const score = Number(attempt?.score) || 0;
+  const total = Number(attempt?.totalQuestions) || 1;
+  const pct = typeof attempt?.percentage === "number" ? attempt.percentage : Math.round((score / total) * 100);
+  const missed = (attempt?.questions || []).filter((q: any) => {
+    const userAns = attempt?.userAnswers?.[q.id];
+    if (!userAns || String(userAns).trim() === "") return true;
+    return String(userAns).trim().toLowerCase() !== String(q.correctAnswer || "").trim().toLowerCase();
+  });
+
+  const rawStruggled = missed.map((q: any) => q.topic || "Core Concepts").filter(Boolean);
+  const struggledTopics = Array.from(new Set(rawStruggled)).slice(0, 3);
+  if (struggledTopics.length === 0) {
+    struggledTopics.push("Core Definitions & Principles");
+  }
+
+  const subject = attempt?.subject || "your study material";
+  const headline = struggledTopics.length > 0
+    ? `You scored ${pct}%. Review ${struggledTopics.join(" & ")}, and try these sub-topics next:`
+    : `Excellent performance (${pct}%) on ${subject}! Ready to reinforce with advanced practice:`;
+
+  const recommendedSubtopics = struggledTopics.map((t: string) => `${t}: Key Definitions & Formulas`);
+  if (recommendedSubtopics.length < 3) {
+    recommendedSubtopics.push(`Practical Problem Solving in ${subject}`);
+    recommendedSubtopics.push(`Speed & Active Recall Practice`);
+  }
+
+  return {
+    headline,
+    struggledTopics,
+    recommendedSubtopics: recommendedSubtopics.slice(0, 4),
+    masteredTopics: Object.keys(attempt?.topicPerformance || {})
+      .filter((t) => !struggledTopics.includes(t))
+      .slice(0, 3),
+    tips: [
+      "Review the explanation for missed questions to identify recurring patterns.",
+      "Create flashcards for essential definitions and equations to strengthen active recall.",
+      "Retake this quiz after a 24-hour interval to solidify memory retention.",
+    ],
+    encouragement: pct >= 80 ? "Superb job! You have a solid grasp of the core concepts." : "Great effort! Consistent daily practice turns weak spots into your strongest areas.",
+    recommendedAction: "Review Missed Questions",
+  };
+}
+
+// 1. Health check endpoints (supports standard Cloud Run & Kubernetes probes)
+app.get(["/api/health", "/health", "/healthz"], (_req, res) => {
   const hasKey = !!process.env.GEMINI_API_KEY;
   res.json({ status: "ok", aiConfigured: hasKey });
 });
@@ -439,23 +535,49 @@ app.post("/api/generate-quiz", async (req, res) => {
       ? config.weakConcepts
       : null;
 
-    const systemInstruction = `You are the High-Speed Exam-Quality Question Generation Engine for Quizify AI (${studyLevel} level).
-MANDATE: Generate rigorous, exam-quality questions derived strictly from the provided material.
-RULES:
-1. Cognitive depth: balance Recall (~20%), Understanding (~30%), Application (~30%), Reasoning (~20%).
-2. No simple recall clichés (never "What is X?" or word replacement). Use scenarios, predictions, cause-and-effect, and error diagnosis.
-3. For MCQs: exactly 4 plausible, balanced options representing real student misconceptions. No obvious giveaway options.
-4. Explanations: provide 1-2 clear sentences explaining why the correct answer holds and why distractors fail.
-5. Grounded: strictly derivable from the notes without fabricating outside trivia.
-6. Internal score: rate 7-10 for concept significance and exam caliber.
+    const systemInstruction = `You are an expert exam tutor and question generation engine specializing in school and competitive exam prep (CBSE Class 10–12 / School / Board / Foundation level).
+
+TARGET AUDIENCE:
+You are generating questions specifically tailored for an AVERAGE STUDENT.
+The student has standard conceptual preparation. Your questions must build confidence while assessing real understanding.
+
+CORE MANDATE & RULES:
+1. SIMPLE & CLEAR LANGUAGE:
+   - Use direct, conversational, and accessible English that an average Class 10–12 student easily grasps on the first read.
+   - Ban overly convoluted sentence structures, dense scientific jargon not present in the notes, and tricky negative double-constructions.
+   - Keep question stems short, natural, and direct (e.g. "What happens when...", "Which of the following explains why...", "What is the role of... in...").
+
+2. STRICT RELEVANCE TO NOTES:
+   - Every question, formula, term, and example MUST be directly derived from the provided notes/chapter.
+   - Never ask for obscure dates, trivia, or details not highlighted in the notes.
+   - Do NOT ask questions requiring prerequisite knowledge outside the provided content.
+   - If the notes don't contain enough information for a solid question, skip or synthesize only what is firmly supported.
+
+3. FOCUS ON CORE CONCEPTS & COMMON EXAM QUESTIONS:
+   - Emphasize important concepts, main definitions, fundamental formulas, direct examples, and high-frequency exam questions (School & Board exam style).
+   - Balance: ~40% Easy (direct recall, definitions, key formulas, primary components) and ~60% Medium (straightforward conceptual application, simple cause-and-effect, identifying examples).
+   - AVOID unnecessarily hard, tricky, or ambiguous edge-case questions. Test understanding, not confusing wording.
+
+4. REALISTIC, STRAIGHTFORWARD MCQ OPTIONS:
+   - Multiple Choice questions must have exactly 4 clear, plausible options.
+   - Distractors must represent real student misconceptions (e.g., swapping reactant with product, confusing mitosis with meiosis, reversing direction of heat flow), NOT bizarre, absurd, or needlessly verbose text.
+   - Keep options balanced in length and easy to scan.
+
+5. CLEAR, SUPPORTIVE EXPLANATIONS:
+   - Provide a clear, supportive 1–2 sentence explanation referencing the exact principle from the notes.
+   - In distractor explanations, gently highlight the common pitfall or misconception so the student learns from mistakes.
+
+6. GOLDEN RULE:
+   - Make the student think a little about the concept, but NEVER make the question difficult because of complicated language.
 ${weakConceptsList ? `Target Weak Concepts to reinforce: ${weakConceptsList.join(", ")}.` : ""}`;
 
-    const userPromptText = `Generate ${requestedCount} exam-quality quiz questions based strictly on the study material below.
-Difficulty: ${difficulty} | Types: ${questionTypeFilter}
-${config?.title ? `Title: ${config.title}` : ""}
-${weakConceptsList ? `Target Weak Concepts: ${weakConceptsList.join("; ")}` : ""}
+    const userPromptText = `Generate ${requestedCount} high-yield, clear questions for an average student based strictly on the study material below.
+Difficulty target: ${difficulty} (Keep questions accessible, realistic, and focused on core concepts)
+Question types: ${questionTypeFilter}
+${config?.title ? `Quiz Title: ${config.title}` : ""}
+${weakConceptsList ? `Reinforce Weak Concepts: ${weakConceptsList.join("; ")}` : ""}
 
-Notes content:
+Study material notes:
 ${combinedText || "(Please inspect attached document/image notes directly.)"}`;
 
     contentParts.push({ text: userPromptText });
@@ -463,11 +585,12 @@ ${combinedText || "(Please inspect attached document/image notes directly.)"}`;
     const response = await withTimeout(
       callGeminiWithModelFallback(ai, {
         preferredModel: "gemini-3.1-flash-lite",
-        timeoutPerAttemptMs: 8000,
+        timeoutPerAttemptMs: 25000,
         contents: { parts: contentParts },
         config: {
           systemInstruction,
           temperature: 0.3,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -526,8 +649,8 @@ ${combinedText || "(Please inspect attached document/image notes directly.)"}`;
           },
         },
       }),
-      15000,
-      "Overall quiz generation timed out after 15s"
+      55000,
+      "Overall quiz generation timed out after 55s"
     );
 
     const responseText = response.text || "{}";
@@ -698,11 +821,12 @@ ${combinedText || "(Please read the attached notes image/document directly.)"}`,
     const response = await withTimeout(
       callGeminiWithModelFallback(ai, {
         preferredModel: "gemini-3.1-flash-lite",
-        timeoutPerAttemptMs: 7000,
+        timeoutPerAttemptMs: 20000,
         contents: { parts: contentParts },
         config: {
           systemInstruction,
           temperature: 0.3,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -727,8 +851,8 @@ ${combinedText || "(Please read the attached notes image/document directly.)"}`,
           },
         },
       }),
-      12000,
-      "Flashcards generation timed out after 12s"
+      45000,
+      "Flashcards generation timed out after 45s"
     );
 
     const parsed = cleanAndParseJson(response.text || "{}");
@@ -786,7 +910,7 @@ Explanation: ${q.explanation}`;
     const response = await withTimeout(
       callGeminiWithModelFallback(ai, {
         preferredModel: "gemini-3.1-flash-lite",
-        timeoutPerAttemptMs: 6000,
+        timeoutPerAttemptMs: 18000,
         contents: {
           parts: [
             {
@@ -801,6 +925,7 @@ Data:\n${promptContext}`,
 Your goal is to provide honest, constructive, and actionable improvement tips based on their quiz results.
 Highlight what they mastered, identify where they stumbled, recommend specific sub-topics to tackle next, and provide 2-3 actionable study strategies.`,
           temperature: 0.3,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -850,15 +975,16 @@ Highlight what they mastered, identify where they stumbled, recommend specific s
         },
       },
     }),
-    10000,
-    "Study buddy feedback timed out after 10s"
+    35000,
+    "Study buddy feedback timed out after 35s"
   );
 
     const parsed = cleanAndParseJson(response.text || "{}");
     res.json(parsed);
   } catch (err: any) {
-    console.error("Error in study-buddy-feedback:", err);
-    res.status(500).json({ error: err.message || "Failed to generate AI feedback" });
+    console.log("[Study Buddy] AI feedback fallback engaged:", err?.message || err);
+    // Return structured feedback so the client always gets an actionable, beautiful breakdown
+    res.json(generateFallbackFeedback(req.body?.attempt));
   }
 });
 
@@ -905,7 +1031,7 @@ ${(attempt?.questions || [])
     const response = await withTimeout(
       callGeminiWithModelFallback(ai, {
         preferredModel: "gemini-3.1-flash-lite",
-        timeoutPerAttemptMs: 6000,
+        timeoutPerAttemptMs: 12000,
         contents: { parts: conversationParts },
         config: {
           systemInstruction: `You are Quizify AI's 'AI Study Buddy' tutor.
@@ -915,38 +1041,82 @@ Keep answers concise (around 2-4 sentences or short bullet points) so they fit n
 Reference the student's actual quiz questions when applicable:
 ${promptContext}`,
           temperature: 0.4,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         },
       }),
-      8000,
-      "Study buddy chat timed out after 8s"
+      22000,
+      "Study buddy chat timed out after 22s"
     );
 
     res.json({ reply: response.text || "I'm here to help you master these concepts! What would you like to review?" });
   } catch (err: any) {
-    console.error("Error in study-buddy-chat:", err);
-    res.status(500).json({ error: err.message || "Failed to process chat" });
+    console.log("[Study Buddy] Chat fallback engaged:", err?.message || err);
+    res.json({
+      reply: "I'm actively reviewing your notes! To maximize your retention, start by checking the questions marked incorrect and re-reading the highlighted formulas. Which specific question or concept can I explain for you?"
+    });
   }
 });
 
 // Vite middleware for dev / static for production
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    // Robust path resolution for production dist folder
+    const distPath = fs.existsSync(path.join(__dirname, "index.html"))
+      ? __dirname
+      : path.join(process.cwd(), "dist");
+
     app.use(express.static(distPath));
     app.get("*", (_req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+      const indexPath = path.join(distPath, "index.html");
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(200).send("<!doctype html><html><head><title>Quizify AI</title></head><body><div id='root'></div></body></html>");
+      }
     });
   }
 
+  // Primary listener on port 3000 (required for AI Studio dev reverse proxy)
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Quizify AI server running on http://0.0.0.0:${PORT}`);
+    console.log(`Quizify AI primary server running on http://0.0.0.0:${PORT}`);
   });
+
+  // Cloud Run Rollout Listener:
+  // When deployed to Cloud Run standalone, traffic is routed to process.env.PORT (typically 8080).
+  // In the dev sandbox, nginx already occupies 8080 so EADDRINUSE is safely ignored.
+  if (process.env.PORT && Number(process.env.PORT) !== PORT) {
+    const cloudRunPort = Number(process.env.PORT);
+    try {
+      const secondaryServer = app.listen(cloudRunPort, "0.0.0.0", () => {
+        console.log(`Quizify AI Cloud Run service listening on port ${cloudRunPort}`);
+      });
+      secondaryServer.on("error", (err: any) => {
+        if (err.code === "EADDRINUSE") {
+          console.log(`Port ${cloudRunPort} in use by reverse proxy. Primary port ${PORT} active.`);
+        } else {
+          console.error(`Secondary listener error on port ${cloudRunPort}:`, err);
+        }
+      });
+    } catch (bindErr) {
+      console.log(`Secondary listener skipped on port ${cloudRunPort}:`, bindErr);
+    }
+  }
 }
 
-startServer();
+// Graceful container lifecycle shutdown
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received, shutting down gracefully");
+  process.exit(0);
+});
+
+startServer().catch((err) => {
+  console.error("Fatal error starting server:", err);
+  process.exit(1);
+});

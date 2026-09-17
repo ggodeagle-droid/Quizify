@@ -130,17 +130,28 @@ export default function App() {
     setQuizConfig(config);
     setProcessingStep("Reading study material and extracting concepts...");
 
-    const stepTimer = setTimeout(() => {
-      setProcessingStep("Formulating exam-caliber questions...");
-    }, 1500);
+    const stepTimer1 = setTimeout(() => {
+      setProcessingStep("Generating clear, syllabus-aligned questions...");
+    }, 2000);
 
     const stepTimer2 = setTimeout(() => {
-      setProcessingStep("Finalizing options & high-yield explanations...");
-    }, 3500);
+      setProcessingStep("Crafting realistic options & distractor explanations...");
+    }, 6000);
+
+    const stepTimer3 = setTimeout(() => {
+      setProcessingStep("Verifying question clarity & exam quality...");
+    }, 12000);
 
     const abortController = new AbortController();
-    const timeoutDuration = isQuick ? 9000 : 16000;
+    const timeoutDuration = isQuick ? 30000 : 55000;
     const timeoutId = setTimeout(() => abortController.abort(), timeoutDuration);
+
+    const clearAllTimers = () => {
+      clearTimeout(timeoutId);
+      clearTimeout(stepTimer1);
+      clearTimeout(stepTimer2);
+      clearTimeout(stepTimer3);
+    };
 
     try {
       const response = await fetch("/api/generate-quiz", {
@@ -160,9 +171,7 @@ export default function App() {
         }),
       });
 
-      clearTimeout(timeoutId);
-      clearTimeout(stepTimer);
-      clearTimeout(stepTimer2);
+      clearAllTimers();
 
       if (!response.ok) {
         throw new Error(`Server returned ${response.status}`);
@@ -182,9 +191,7 @@ export default function App() {
       setIsProcessing(false);
       setActiveTab("quiz");
     } catch (err: any) {
-      clearTimeout(timeoutId);
-      clearTimeout(stepTimer);
-      clearTimeout(stepTimer2);
+      clearAllTimers();
       console.warn("Server generation delayed or failed, switching to instant generator:", err);
 
       // Seamless Instant Local Generation: Guarantees user gets questions immediately with zero stalling

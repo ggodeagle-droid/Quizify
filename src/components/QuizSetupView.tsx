@@ -135,6 +135,52 @@ export const QuizSetupView: React.FC<QuizSetupViewProps> = ({
             </div>
           </div>
 
+          {/* Target Student Level & Focus */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+              Target Level
+            </label>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+              {[
+                {
+                  id: "Class 10 (Board Exam / Foundation)",
+                  title: "Class 10 (Board)",
+                  desc: "Core definitions, key concepts & basic formulas",
+                },
+                {
+                  id: "Class 11-12 (School / Boards)",
+                  title: "Class 11–12 (School / Boards)",
+                  desc: "Standard curriculum, key concepts & examples",
+                },
+                {
+                  id: "Class 11-12 (JEE / NEET / Competitive)",
+                  title: "Class 11–12 (JEE / NEET)",
+                  desc: "Exam-oriented concepts & practice applications",
+                },
+              ].map((lvl) => (
+                <button
+                  key={lvl.id}
+                  type="button"
+                  onClick={() => setStudyLevel(lvl.id)}
+                  id={`studylevel-${lvl.title.replace(/[^a-zA-Z0-9]/g, "-")}`}
+                  className={`flex flex-col items-start rounded-xl border p-3 text-left transition-all ${
+                    studyLevel === lvl.id
+                      ? "border-indigo-600 bg-indigo-50/70 text-indigo-900 ring-2 ring-indigo-600/20"
+                      : "border-slate-200 bg-slate-50/50 text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                    <GraduationCap className="h-3.5 w-3.5 text-indigo-600" />
+                    <span>{lvl.title}</span>
+                  </div>
+                  <span className="mt-1 text-[11px] text-slate-500 leading-snug">
+                    {lvl.desc}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* 1. Number of Questions */}
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
@@ -301,19 +347,6 @@ export const QuizSetupView: React.FC<QuizSetupViewProps> = ({
                 />
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Exam-Quality System Standards Pill */}
-        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3.5 flex items-start gap-3 text-xs text-indigo-950">
-          <Sparkles className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5" />
-          <div className="space-y-1">
-            <p className="font-bold text-indigo-900">
-              Exam-Quality Engine Active (Score 7–10 Filter)
-            </p>
-            <p className="text-slate-600 text-[11px] leading-relaxed">
-              Every question is scored across cognitive depth (20% Recall, 30% Understanding, 30% Application, 20% Reasoning) with plausible distractors, no giveaway options, and teaching explanations.
-            </p>
           </div>
         </div>
 

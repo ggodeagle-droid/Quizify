@@ -76,10 +76,12 @@ export function createInstantQuizFromNotes(
         : "short_answer";
 
     if (qType === "mcq") {
-      const correct = `The system maintains steady-state progression: "${sentence.substring(0, 50)}..."`;
-      const d1 = `The process accelerates arbitrarily because inverse parameters cancel limiting boundaries`;
-      const d2 = `The rate drops to zero because external factors replace internal reaction kinetics`;
-      const d3 = `The mechanism reverses spontaneous directionality without supplying external energy`;
+      const cleanSnippet = sentence.replace(/^[0-9.\-\s]+/, "").trim();
+      const questionPrompt = `Based on your notes, which of the following is TRUE about this concept?\n"${cleanSnippet.substring(0, 95)}..."`;
+      const correct = `It directly follows the rule: "${cleanSnippet.substring(0, 50)}..."`;
+      const d1 = `It happens independently without needing any prerequisite conditions or energy`;
+      const d2 = `The rate drops to zero because outside factors cancel the process completely`;
+      const d3 = `The process works in the exact opposite direction without any energy or force`;
 
       const options = shuffle([correct, d1, d2, d3]);
 
@@ -87,61 +89,64 @@ export function createInstantQuizFromNotes(
         id: `local-q-${i + 1}`,
         type: "mcq",
         cognitiveLevel,
-        qualityScore: 9,
-        question: `Based on your study notes: "${sentence.substring(0, 80)}...". In a controlled test setup where initial conditions are varied within safe boundaries, which statement accurately reflects the governing principle?`,
+        qualityScore: 8,
+        question: questionPrompt,
         options,
         correctAnswer: correct,
-        explanation: `According to your study notes, "${sentence}". This relationship governs the expected behavior under controlled boundary conditions.\n\nDistractor Analysis: Physical mechanisms cannot eliminate limiting factors, nor can they arbitrarily invert directionality without energy transfer.`,
+        explanation: `According to your study notes: "${cleanSnippet}". This directly confirms the correct answer.\n\nCommon Misconception: Processes cannot happen without necessary prerequisites or run backwards without external energy.`,
         distractorExplanations: {
-          [d1]: "Misconception regarding cancellation of boundary constraints.",
-          [d2]: "Misconception regarding replacing internal reaction kinetics.",
-          [d3]: "Misconception regarding spontaneous reversal without energy transfer.",
+          [d1]: "Common misconception: assuming prerequisites are not required.",
+          [d2]: "Common misconception: assuming external factors stop the reaction.",
+          [d3]: "Common misconception: assuming spontaneous reversal without energy.",
         },
         topic,
-        hint: "Reflect on the governing dependency stated in the note excerpt.",
+        hint: "Look for the option that directly agrees with your chapter notes.",
       });
     } else if (qType === "true_false") {
+      const cleanSnippet = sentence.replace(/^[0-9.\-\s]+/, "").trim();
       questions.push({
         id: `local-q-${i + 1}`,
         type: "true_false",
         cognitiveLevel: "understanding",
         qualityScore: 8,
-        question: `Consider this statement: "In the context of ${topic.toLowerCase()}, the condition '${sentence.substring(0, 60)}' can proceed without satisfying any prerequisite threshold." Is this statement scientifically valid?`,
+        question: `According to your notes, is the following statement TRUE or FALSE?\n"${cleanSnippet.substring(0, 90)}..."`,
         options: ["True", "False"],
-        correctAnswer: "False",
-        explanation: `False. As established in your study material: "${sentence.substring(0, 85)}", the mechanism requires specified prerequisite conditions and operational thresholds.`,
+        correctAnswer: "True",
+        explanation: `True. This is stated directly in your study notes: "${cleanSnippet}".`,
         topic,
-        hint: "Evaluate whether prerequisites are necessary for this relationship to hold.",
+        hint: "Check whether this statement matches the key point in your notes.",
       });
     } else if (qType === "fill_blank") {
-      const words = sentence.split(" ").filter((w) => w.length > 4 && !/[,.;:()]/g.test(w));
+      const cleanSnippet = sentence.replace(/^[0-9.\-\s]+/, "").trim();
+      const words = cleanSnippet.split(" ").filter((w) => w.length > 4 && !/[,.;:()]/g.test(w));
       const targetWord = words[Math.min(1, words.length - 1)] || "equilibrium";
-      const masked = sentence.replace(new RegExp(targetWord, "i"), "_______");
+      const masked = cleanSnippet.replace(new RegExp(targetWord, "i"), "_______");
 
       questions.push({
         id: `local-q-${i + 1}`,
         type: "fill_blank",
         cognitiveLevel: "understanding",
         qualityScore: 8,
-        question: `Complete the key principle from your notes: "${masked}"`,
+        question: `Fill in the blank with the correct word from your notes:\n"${masked}"`,
         options: [],
         correctAnswer: targetWord,
-        explanation: `"${targetWord}" completes the definition: "${sentence}".`,
+        explanation: `"${targetWord}" completes the statement from your notes: "${cleanSnippet}".`,
         topic,
-        hint: `The missing term begins with '${targetWord[0]}'.`,
+        hint: `The missing word begins with '${targetWord[0]}'.`,
       });
     } else {
+      const cleanSnippet = sentence.replace(/^[0-9.\-\s]+/, "").trim();
       questions.push({
         id: `local-q-${i + 1}`,
         type: "short_answer",
-        cognitiveLevel: "reasoning",
-        qualityScore: 9,
-        question: `Synthesize the primary relationship established in your notes: "${sentence.substring(0, 75)}...". What key mechanism prevents arbitrary deviation from this rule?`,
+        cognitiveLevel: "understanding",
+        qualityScore: 8,
+        question: `In 1–2 simple sentences, summarize what your notes state about: "${cleanSnippet.substring(0, 75)}..."`,
         options: [],
-        correctAnswer: `The governing principle "${sentence.substring(0, 45)}" establishes physical constraints.`,
-        explanation: `As detailed in your notes: "${sentence}", the governing dynamics restrict arbitrary deviation.`,
+        correctAnswer: cleanSnippet.substring(0, 70),
+        explanation: `Core fact from your notes: "${cleanSnippet}".`,
         topic,
-        hint: "State the constraint or law established in the notes.",
+        hint: "State the main rule or definition from your notes.",
       });
     }
   }
